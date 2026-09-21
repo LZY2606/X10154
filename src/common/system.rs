@@ -2513,6 +2513,25 @@ impl UpdateKind {
             Self::OnlyIfNotSet => f(),
         }
     }
+
+    /// Returns `true` if this kind asks for the information to be retrieved.
+    pub(crate) fn is_set(self) -> bool {
+        !matches!(self, Self::Never)
+    }
+
+    /// Returns the least demanding of the two kinds.
+    pub(crate) fn min(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Never, _) | (_, Self::Never) => Self::Never,
+            (Self::OnlyIfNotSet, _) | (_, Self::OnlyIfNotSet) => Self::OnlyIfNotSet,
+            _ => Self::Always,
+        }
+    }
+
+    /// Returns `self` if `other` is not set, `Never` otherwise.
+    pub(crate) fn without(self, other: Self) -> Self {
+        if other.is_set() { Self::Never } else { self }
+    }
 }
 
 /// This enum allows you to specify if you want all processes to be updated or just
@@ -2730,6 +2749,63 @@ It will retrieve the following information:
         with_gpu_memory,
         without_gpu_memory
     );
+}
+
+impl ProcessRefreshKind {
+    /// Returns the fields requested by `self` which are also present in `other`.
+    pub(crate) fn intersection(self, other: Self) -> Self {
+        Self {
+            cpu: self.cpu && other.cpu,
+            disk_usage: self.disk_usage && other.disk_usage,
+            memory: self.memory && other.memory,
+            user: self.user.min(other.user),
+            cwd: self.cwd.min(other.cwd),
+            root: self.root.min(other.root),
+            environ: self.environ.min(other.environ),
+            cmd: self.cmd.min(other.cmd),
+            exe: self.exe.min(other.exe),
+            tasks: self.tasks && other.tasks,
+            gpu_usage: self.gpu_usage && other.gpu_usage,
+            gpu_memory: self.gpu_memory && other.gpu_memory,
+        }
+    }
+
+    /// Returns the fields requested by `self` which are missing from `other`.
+    pub(crate) fn difference(self, other: Self) -> Self {
+        Self {
+            cpu: self.cpu && !other.cpu,
+            disk_usage: self.disk_usage && !other.disk_usage,
+            memory: self.memory && !other.memory,
+            user: self.user.without(other.user),
+            cwd: self.cwd.without(other.cwd),
+            root: self.root.without(other.root),
+            environ: self.environ.without(other.environ),
+            cmd: self.cmd.without(other.cmd),
+            exe: self.exe.without(other.exe),
+            tasks: self.tasks && !other.tasks,
+            gpu_usage: self.gpu_usage && !other.gpu_usage,
+            gpu_memory: self.gpu_memory && !other.gpu_memory,
+        }
+    }
+
+    /// Returns `true` if no field is requested at all.
+    ///
+    /// Note that unlike [`ProcessRefreshKind::nothing`], this also returns `false` if only
+    /// `tasks` is set.
+    pub(crate) fn has_no_fields(&self) -> bool {
+        !self.cpu
+            && !self.disk_usage
+            && !self.memory
+            && !self.user.is_set()
+            && !self.cwd.is_set()
+            && !self.root.is_set()
+            && !self.environ.is_set()
+            && !self.cmd.is_set()
+            && !self.exe.is_set()
+            && !self.tasks
+            && !self.gpu_usage
+            && !self.gpu_memory
+    }
 }
 
 /// Used to determine what you want to refresh specifically on the [`Cpu`] type.
