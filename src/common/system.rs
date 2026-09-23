@@ -2730,6 +2730,72 @@ It will retrieve the following information:
         with_gpu_memory,
         without_gpu_memory
     );
+
+    /// Returns the fields requested by `self` which are also supported by `other`.
+    pub(crate) fn intersection(self, other: Self) -> Self {
+        fn update_kind_intersection(a: UpdateKind, b: UpdateKind) -> UpdateKind {
+            if b == UpdateKind::Never {
+                UpdateKind::Never
+            } else {
+                a
+            }
+        }
+        Self {
+            cpu: self.cpu && other.cpu,
+            disk_usage: self.disk_usage && other.disk_usage,
+            memory: self.memory && other.memory,
+            user: update_kind_intersection(self.user, other.user),
+            cwd: update_kind_intersection(self.cwd, other.cwd),
+            root: update_kind_intersection(self.root, other.root),
+            environ: update_kind_intersection(self.environ, other.environ),
+            cmd: update_kind_intersection(self.cmd, other.cmd),
+            exe: update_kind_intersection(self.exe, other.exe),
+            tasks: self.tasks && other.tasks,
+            gpu_usage: self.gpu_usage && other.gpu_usage,
+            gpu_memory: self.gpu_memory && other.gpu_memory,
+        }
+    }
+
+    /// Returns the fields requested by `self` which are NOT supported by `other`.
+    pub(crate) fn difference(self, other: Self) -> Self {
+        fn update_kind_difference(a: UpdateKind, b: UpdateKind) -> UpdateKind {
+            if b == UpdateKind::Never {
+                a
+            } else {
+                UpdateKind::Never
+            }
+        }
+        Self {
+            cpu: self.cpu && !other.cpu,
+            disk_usage: self.disk_usage && !other.disk_usage,
+            memory: self.memory && !other.memory,
+            user: update_kind_difference(self.user, other.user),
+            cwd: update_kind_difference(self.cwd, other.cwd),
+            root: update_kind_difference(self.root, other.root),
+            environ: update_kind_difference(self.environ, other.environ),
+            cmd: update_kind_difference(self.cmd, other.cmd),
+            exe: update_kind_difference(self.exe, other.exe),
+            tasks: self.tasks && !other.tasks,
+            gpu_usage: self.gpu_usage && !other.gpu_usage,
+            gpu_memory: self.gpu_memory && !other.gpu_memory,
+        }
+    }
+
+    /// Returns `true` if at least one field is requested.
+    pub(crate) fn any_requested(self) -> bool {
+        self.cpu
+            || self.disk_usage
+            || self.memory
+            || self.user != UpdateKind::Never
+            || self.cwd != UpdateKind::Never
+            || self.root != UpdateKind::Never
+            || self.environ != UpdateKind::Never
+            || self.cmd != UpdateKind::Never
+            || self.exe != UpdateKind::Never
+            || self.tasks
+            || self.gpu_usage
+            || self.gpu_memory
+    }
 }
 
 /// Used to determine what you want to refresh specifically on the [`Cpu`] type.
