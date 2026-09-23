@@ -2,8 +2,8 @@
 
 use crate::{
     Cpu, CpuRefreshKind, Error, LoadAvg, MemoryRefreshKind, Pid, Process, ProcessRefreshKind,
-    ProcessesToUpdate,
 };
+use crate::common::refresh_plan::{PlatformCapabilities, ProcessRefreshPlan};
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -17,6 +17,14 @@ declare_signals! {
 pub const SUPPORTED_SIGNALS: &[crate::Signal] = supported_signals();
 #[doc = include_str!("../../md_doc/minimum_cpu_update_interval.md")]
 pub const MINIMUM_CPU_UPDATE_INTERVAL: Duration = Duration::from_millis(0);
+
+pub(crate) fn process_refresh_capabilities() -> PlatformCapabilities {
+    PlatformCapabilities::new(
+        ProcessRefreshKind::nothing().without_tasks(),
+        MINIMUM_CPU_UPDATE_INTERVAL,
+        false,
+    )
+}
 
 pub(crate) struct SystemInner;
 
@@ -37,8 +45,7 @@ impl SystemInner {
 
     pub(crate) fn refresh_processes_specifics(
         &mut self,
-        _processes_to_update: ProcessesToUpdate<'_>,
-        _refresh_kind: ProcessRefreshKind,
+        _plan: &ProcessRefreshPlan,
     ) -> usize {
         unreachable!()
     }
@@ -149,5 +156,17 @@ impl SystemInner {
 
     pub(crate) fn open_files_limit() -> Result<usize, Error> {
         Err(Error::Unsupported)
+    }
+}
+
+#[cfg(test)]
+mod refresh_plan_contract_tests {
+    #[test]
+    fn unknown_adapter_consumes_refresh_plan() {
+        let caps = super::process_refresh_capabilities();
+        // The unknown backend cannot list processes and supports nothing.
+        assert!(!caps.can_list_processes());
+        assert!(!caps.supported_fields().cpu());
+        crate::common::refresh_plan::tests::platform_adapter_contract();
     }
 }

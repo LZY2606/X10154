@@ -2,11 +2,11 @@
 
 use crate::{
     Cpu, CpuRefreshKind, Error, LoadAvg, MemoryRefreshKind, Pid, ProcessRefreshKind,
-    ProcessesToUpdate,
 };
 
 use crate::sys::cpu::*;
 use crate::{Process, ProcessInner};
+use crate::common::refresh_plan::{PlatformCapabilities, ProcessRefreshPlan};
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -40,6 +40,14 @@ declare_signals! {
 pub const SUPPORTED_SIGNALS: &[crate::Signal] = supported_signals();
 #[doc = include_str!("../../md_doc/minimum_cpu_update_interval.md")]
 pub const MINIMUM_CPU_UPDATE_INTERVAL: Duration = Duration::from_millis(200);
+
+pub(crate) fn process_refresh_capabilities() -> PlatformCapabilities {
+    let mut supported_fields = ProcessRefreshKind::everything().without_tasks();
+    if !cfg!(feature = "gpu") {
+        supported_fields = supported_fields.without_gpu_usage().without_gpu_memory();
+    }
+    PlatformCapabilities::new(supported_fields, MINIMUM_CPU_UPDATE_INTERVAL, true)
+}
 
 const WINDOWS_ELEVEN_BUILD_NUMBER: u32 = 22000;
 
@@ -197,33 +205,9 @@ impl SystemInner {
     #[allow(clippy::cast_ptr_alignment)]
     pub(crate) fn refresh_processes_specifics(
         &mut self,
-        processes_to_update: ProcessesToUpdate<'_>,
-        refresh_kind: ProcessRefreshKind,
+        plan: &ProcessRefreshPlan,
     ) -> usize {
-        #[inline(always)]
-        fn real_filter(e: Pid, filter: &[Pid]) -> bool {
-            filter.contains(&e)
-        }
-
-        #[inline(always)]
-        fn empty_filter(_e: Pid, _filter: &[Pid]) -> bool {
-            true
-        }
-
-        #[allow(clippy::type_complexity)]
-        let (filter_array, filter_callback): (
-            &[Pid],
-            &(dyn Fn(Pid, &[Pid]) -> bool + Sync + Send),
-        ) = match processes_to_update {
-            ProcessesToUpdate::All => (&[], &empty_filter),
-            ProcessesToUpdate::Some(pids) => {
-                if pids.is_empty() {
-                    return 0;
-                }
-                (pids, &real_filter)
-            }
-        };
-
+        let refresh_kind = plan.refresh_kind();
         let now = get_now();
 
         let nb_cpus = if refresh_kind.cpu() {

@@ -5,9 +5,9 @@ use crate::sys::cpu::*;
 use crate::sys::process::*;
 use crate::sys::utils::{get_sys_value, get_sys_value_by_name};
 
+use crate::common::refresh_plan::{PlatformCapabilities, ProcessRefreshPlan};
 use crate::{
     Cpu, CpuRefreshKind, Error, LoadAvg, MemoryRefreshKind, Pid, Process, ProcessRefreshKind,
-    ProcessesToUpdate,
 };
 
 #[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
@@ -72,6 +72,26 @@ declare_signals! {
 pub const SUPPORTED_SIGNALS: &[crate::Signal] = supported_signals();
 #[doc = include_str!("../../../md_doc/minimum_cpu_update_interval.md")]
 pub const MINIMUM_CPU_UPDATE_INTERVAL: Duration = Duration::from_millis(200);
+
+#[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
+pub(crate) fn process_refresh_capabilities() -> PlatformCapabilities {
+    let mut supported_fields = ProcessRefreshKind::everything()
+        .without_tasks()
+        .without_gpu_memory();
+    if !cfg!(feature = "gpu") {
+        supported_fields = supported_fields.without_gpu_usage();
+    }
+    PlatformCapabilities::new(supported_fields, MINIMUM_CPU_UPDATE_INTERVAL, true)
+}
+
+#[cfg(any(target_os = "ios", feature = "apple-sandbox"))]
+pub(crate) fn process_refresh_capabilities() -> PlatformCapabilities {
+    PlatformCapabilities::new(
+        ProcessRefreshKind::nothing().without_tasks(),
+        MINIMUM_CPU_UPDATE_INTERVAL,
+        false,
+    )
+}
 
 pub(crate) struct SystemInner {
     process_list: HashMap<Pid, Process>,
@@ -226,8 +246,7 @@ impl SystemInner {
     #[cfg(any(target_os = "ios", feature = "apple-sandbox"))]
     pub(crate) fn refresh_processes_specifics(
         &mut self,
-        _processes_to_update: ProcessesToUpdate<'_>,
-        _refresh_kind: ProcessRefreshKind,
+        _plan: &ProcessRefreshPlan,
     ) -> usize {
         0
     }
@@ -235,12 +254,12 @@ impl SystemInner {
     #[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
     pub(crate) fn refresh_processes_specifics(
         &mut self,
-        processes_to_update: ProcessesToUpdate<'_>,
-        refresh_kind: ProcessRefreshKind,
+        plan: &ProcessRefreshPlan,
     ) -> usize {
         use crate::utils::into_iter;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
+        let refresh_kind = plan.refresh_kind();
         unsafe {
             let count = libc::proc_listallpids(::std::ptr::null_mut(), 0);
             if count < 1 {
@@ -248,30 +267,6 @@ impl SystemInner {
             }
         }
         if let Some(pids) = get_proc_list() {
-            #[inline(always)]
-            fn real_filter(e: Pid, filter: &[Pid]) -> bool {
-                filter.contains(&e)
-            }
-
-            #[inline(always)]
-            fn empty_filter(_e: Pid, _filter: &[Pid]) -> bool {
-                true
-            }
-
-            #[allow(clippy::type_complexity)]
-            let (filter, filter_callback): (
-                &[Pid],
-                &(dyn Fn(Pid, &[Pid]) -> bool + Sync + Send),
-            ) = match processes_to_update {
-                ProcessesToUpdate::All => (&[], &empty_filter),
-                ProcessesToUpdate::Some(pids_to_refresh) => {
-                    if pids_to_refresh.is_empty() {
-                        return 0;
-                    }
-                    (pids_to_refresh, &real_filter)
-                }
-            };
-
             let nb_updated = AtomicUsize::new(0);
             let now = get_now();
             let port = self.port;
@@ -289,7 +284,7 @@ impl SystemInner {
 
                 into_iter(pids)
                     .flat_map(|pid| {
-                        if !filter_callback(pid, filter) {
+                        if !plan.includes_pid(pid) {
                             return None;
                         }
                         nb_updated.fetch_add(1, Ordering::Relaxed);
@@ -772,5 +767,21 @@ mod gpu {
             let dict = dict.cast_unchecked::<CFString, CFType>();
             dict.get(key)?.downcast::<CFArray>().ok()
         }
+    }
+}
+
+#[cfg(test)]
+mod refresh_plan_contract_tests {
+    #[test]
+    fn apple_adapter_consumes_refresh_plan() {
+        let caps = super::process_refresh_capabilities();
+        if cfg!(any(target_os = "ios", feature = "apple-sandbox")) {
+            assert!(!caps.can_list_processes());
+        } else {
+            assert!(caps.can_list_processes());
+            // Tasks are a Linux concept, they are not supported here.
+            assert!(!caps.supported_fields().tasks());
+        }
+        crate::common::refresh_plan::tests::platform_adapter_contract();
     }
 }

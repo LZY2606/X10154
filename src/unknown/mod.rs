@@ -14,6 +14,7 @@ cfg_select! {
         pub(crate) use self::product::ProductInner;
         pub(crate) use self::system::SystemInner;
         pub use self::system::{MINIMUM_CPU_UPDATE_INTERVAL, SUPPORTED_SIGNALS};
+        pub(crate) use self::system::process_refresh_capabilities;
     }
     _ => {}
 }

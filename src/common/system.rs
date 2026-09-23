@@ -9,6 +9,7 @@ use std::str::FromStr;
 
 use crate::common::DiskUsage;
 use crate::common::impl_get_set::impl_get_set;
+use crate::common::refresh_plan::{PlanSelection, ProcessRefreshPlan};
 use crate::{CpuInner, Error, Gid, MotherboardInner, ProcessInner, ProductInner, SystemInner, Uid};
 
 /// Type containing system's information such as processes, memory and CPU.
@@ -361,9 +362,19 @@ impl System {
         remove_dead_processes: bool,
         refresh_kind: ProcessRefreshKind,
     ) -> usize {
-        let nb_updated = self
-            .inner
-            .refresh_processes_specifics(processes_to_update, refresh_kind);
+        // The refresh request is normalized once, in a platform-independent
+        // way. Platform adapters only execute the plan.
+        let plan = ProcessRefreshPlan::new(
+            processes_to_update,
+            refresh_kind,
+            remove_dead_processes,
+            &crate::sys::process_refresh_capabilities(),
+        );
+        let nb_updated = if plan.should_collect() {
+            self.inner.refresh_processes_specifics(&plan)
+        } else {
+            0
+        };
 
         // FIXME: This code is absolutely awful, find a better way to do the same (ie remove GPU
         // counters when removing a process) in a code which doesn't need all that...
@@ -396,9 +407,9 @@ impl System {
 
                 let mut gpu_query = self.inner.gpu_query.take();
                 let processes = self.inner.processes_mut();
-                match processes_to_update {
-                    ProcessesToUpdate::All => {
-                        if remove_dead_processes {
+                match plan.selection() {
+                    PlanSelection::All => {
+                        if plan.remove_dead_processes() {
                             processes.retain(|_, v| {
                                 let to_keep = v.inner.switch_updated();
                                 if !to_keep {
@@ -412,8 +423,8 @@ impl System {
                             }
                         }
                     }
-                    ProcessesToUpdate::Some(pids) => {
-                        let call = if remove_dead_processes {
+                    PlanSelection::Some(pids) => {
+                        let call = if plan.remove_dead_processes() {
                             update_and_remove
                         } else {
                             update
@@ -445,9 +456,9 @@ impl System {
                 }
 
                 let processes = self.inner.processes_mut();
-                match processes_to_update {
-                    ProcessesToUpdate::All => {
-                        if remove_dead_processes {
+                match plan.selection() {
+                    PlanSelection::All => {
+                        if plan.remove_dead_processes() {
                             processes.retain(|_, v| v.inner.switch_updated());
                         } else {
                             for proc in processes.values_mut() {
@@ -455,8 +466,8 @@ impl System {
                             }
                         }
                     }
-                    ProcessesToUpdate::Some(pids) => {
-                        let call = if remove_dead_processes {
+                    PlanSelection::Some(pids) => {
+                        let call = if plan.remove_dead_processes() {
                             update_and_remove
                         } else {
                             update

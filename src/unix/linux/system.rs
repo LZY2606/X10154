@@ -3,9 +3,9 @@
 use crate::sys::cpu::{CpusWrapper, get_physical_core_count};
 use crate::sys::process::{compute_cpu_usage, refresh_procs};
 use crate::sys::utils::{get_all_utf8_data, to_u64};
+use crate::common::refresh_plan::{PlatformCapabilities, ProcessRefreshPlan};
 use crate::{
     Cpu, CpuRefreshKind, Error, LoadAvg, MemoryRefreshKind, Pid, Process, ProcessRefreshKind,
-    ProcessesToUpdate,
 };
 
 use libc::{self, _SC_CLK_TCK, _SC_HOST_NAME_MAX, _SC_PAGESIZE, c_char, sysconf};
@@ -112,6 +112,14 @@ declare_signals! {
 pub const SUPPORTED_SIGNALS: &[crate::Signal] = supported_signals();
 #[doc = include_str!("../../../md_doc/minimum_cpu_update_interval.md")]
 pub const MINIMUM_CPU_UPDATE_INTERVAL: Duration = Duration::from_millis(200);
+
+pub(crate) fn process_refresh_capabilities() -> PlatformCapabilities {
+    let mut supported_fields = ProcessRefreshKind::everything();
+    if !cfg!(feature = "gpu") {
+        supported_fields = supported_fields.without_gpu_usage().without_gpu_memory();
+    }
+    PlatformCapabilities::new(supported_fields, MINIMUM_CPU_UPDATE_INTERVAL, true)
+}
 
 fn boot_time() -> Result<u64, Error> {
     if let Ok(buf) = File::open("/proc/stat").and_then(|mut f| {
@@ -279,8 +287,7 @@ impl SystemInner {
 
     pub(crate) fn refresh_processes_specifics(
         &mut self,
-        processes_to_update: ProcessesToUpdate<'_>,
-        refresh_kind: ProcessRefreshKind,
+        plan: &ProcessRefreshPlan,
     ) -> usize {
         let uptime = Self::uptime().unwrap_or(0);
         let nb_updated = refresh_procs(
@@ -288,10 +295,10 @@ impl SystemInner {
             Path::new("/proc"),
             uptime,
             &self.info,
-            processes_to_update,
-            refresh_kind,
+            plan.processes_to_update(),
+            plan.refresh_kind(),
         );
-        self.update_procs_cpu(refresh_kind);
+        self.update_procs_cpu(plan.refresh_kind());
         nb_updated
     }
 
@@ -929,5 +936,17 @@ DISTRIB_DESCRIPTION="Ubuntu 20.10"
             system_info_as_list(Some("rhel        fedora".to_string())),
             vec!["rhel".to_string(), "fedora".to_string()],
         );
+    }
+}
+
+#[cfg(test)]
+mod refresh_plan_contract_tests {
+    #[test]
+    fn linux_adapter_consumes_refresh_plan() {
+        let caps = super::process_refresh_capabilities();
+        assert!(caps.can_list_processes());
+        // Linux supports every field, including tasks.
+        assert!(caps.supported_fields().tasks());
+        crate::common::refresh_plan::tests::platform_adapter_contract();
     }
 }
