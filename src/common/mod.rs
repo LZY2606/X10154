@@ -11,6 +11,8 @@ pub(crate) mod impl_get_set;
 #[cfg(feature = "network")]
 pub(crate) mod network;
 #[cfg(feature = "system")]
+pub(crate) mod process_refresh;
+#[cfg(feature = "system")]
 pub(crate) mod system;
 #[cfg(feature = "user")]
 pub(crate) mod user;
